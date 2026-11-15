@@ -1,0 +1,1111 @@
+diff --git a/README.md b/README.md
+index 908816b..4ade0f3 100644
+--- a/README.md
++++ b/README.md
+@@ -32,3 +32,11 @@ Push ke branch `main` atau jalankan manual di tab Actions. APK ada di **Artifact
+ ## Catatan
+ - Role `admin` diatur manual di Firestore (`users/{uid}.role`).
+ - Kode Developer dicek di sisi aplikasi, jadi bisa dibongkar dari APK. Untuk keamanan nyata, pindahkan ke Cloud Function.
++
++## Update 1.1 - Kode Developer lewat Gmail (EmailJS)
++Kode developer sekarang dibuat acak oleh aplikasi (6 angka, berlaku 10 menit) lalu dikirim ke Gmail.
++1. Daftar di emailjs.com (gratis, 200 email/bulan), tambahkan **Email Service** (Gmail).
++2. Buat **Email Template**: kolom *To Email* diisi `{{to_email}}`, isi pesan memuat `{{code}}`.
++3. Account > Security: aktifkan izin API untuk aplikasi non-browser.
++4. Isi `Config.kt` (`EMAILJS_SERVICE_ID`, `EMAILJS_TEMPLATE_ID`, `EMAILJS_PUBLIC_KEY`).
++5. `APPROVER_EMAIL` kosong = kode ke Gmail pendaftar. Diisi = kode ke Gmail pemilik (pemilik yang menyetujui).
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index b8cfdd8..6b4f94d 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -14,8 +14,8 @@ android {
+         applicationId = "com.guild.games"
+         minSdk = 24
+         targetSdk = 34
+-        versionCode = 1
+-        versionName = "1.0"
++        versionCode = 2
++        versionName = "1.1"
+     }
+ 
+     signingConfigs {
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index fe712ce..815cacb 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -3,7 +3,8 @@
+     <uses-permission android:name="android.permission.INTERNET" />
+     <application
+         android:allowBackup="true"
+-        android:icon="@drawable/ic_launcher"
++        android:icon="@mipmap/ic_launcher"
++        android:roundIcon="@mipmap/ic_launcher"
+         android:label="@string/app_name"
+         android:theme="@style/Theme.GuildGames">
+         <activity
+diff --git a/app/src/main/java/com/guild/games/data/Config.kt b/app/src/main/java/com/guild/games/data/Config.kt
+new file mode 100644
+index 0000000..bbf0650
+--- /dev/null
++++ b/app/src/main/java/com/guild/games/data/Config.kt
+@@ -0,0 +1,14 @@
++package com.guild.games.data
++
++/** Isi dari akun EmailJS (emailjs.com). Kosong = fitur kirim kode belum aktif. */
++object Config {
++    const val EMAILJS_SERVICE_ID = ""
++    const val EMAILJS_TEMPLATE_ID = ""
++    const val EMAILJS_PUBLIC_KEY = ""
++
++    /**
++     * Kosong  = kode dikirim ke Gmail yang didaftarkan (verifikasi Gmail).
++     * Diisi   = kode dikirim ke Gmail pemilik aplikasi (pemilik yang menyetujui developer baru).
++     */
++    const val APPROVER_EMAIL = ""
++}
+diff --git a/app/src/main/java/com/guild/games/data/DevCode.kt b/app/src/main/java/com/guild/games/data/DevCode.kt
+new file mode 100644
+index 0000000..234a3bd
+--- /dev/null
++++ b/app/src/main/java/com/guild/games/data/DevCode.kt
+@@ -0,0 +1,81 @@
++package com.guild.games.data
++
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
++import org.json.JSONObject
++import java.net.HttpURLConnection
++import java.net.URL
++import java.security.SecureRandom
++
++/** Kode developer: dibuat acak oleh aplikasi, dikirim lewat email, berlaku 10 menit, maksimal 5 percobaan. */
++object DevCode {
++    private const val VALID_MS = 10 * 60 * 1000L
++    private const val MAX_TRIES = 5
++
++    private var code: String? = null
++    private var email = ""
++    private var issuedAt = 0L
++    private var tries = 0
++
++    fun isConfigured() = Config.EMAILJS_SERVICE_ID.isNotBlank() &&
++        Config.EMAILJS_TEMPLATE_ID.isNotBlank() && Config.EMAILJS_PUBLIC_KEY.isNotBlank()
++
++    /** @return null jika sukses, atau pesan error */
++    suspend fun request(gmail: String): String? {
++        if (!isConfigured()) return "Layanan email belum diatur"
++        val newCode = String.format("%06d", SecureRandom().nextInt(1_000_000))
++        val target = Config.APPROVER_EMAIL.ifBlank { gmail.trim() }
++        val err = withContext(Dispatchers.IO) { send(target, newCode, gmail.trim()) }
++        if (err == null) {
++            code = newCode
++            email = gmail.trim().lowercase()
++            issuedAt = System.currentTimeMillis()
++            tries = 0
++        }
++        return err
++    }
++
++    /** @return null jika kode benar, atau pesan error */
++    fun verify(gmail: String, input: String): String? {
++        val c = code ?: return "Minta kode dulu lewat tombol Kirim Kode"
++        if (gmail.trim().lowercase() != email) return "Gmail berbeda dari yang meminta kode"
++        if (System.currentTimeMillis() - issuedAt > VALID_MS) {
++            code = null
++            return "Kode kedaluwarsa, minta kode baru"
++        }
++        tries++
++        if (tries > MAX_TRIES) {
++            code = null
++            return "Terlalu banyak percobaan, minta kode baru"
++        }
++        if (input.trim() != c) return "Kode Developer Salah"
++        code = null
++        return null
++    }
++
++    private fun send(to: String, code: String, requester: String): String? = try {
++        val body = JSONObject().apply {
++            put("service_id", Config.EMAILJS_SERVICE_ID)
++            put("template_id", Config.EMAILJS_TEMPLATE_ID)
++            put("user_id", Config.EMAILJS_PUBLIC_KEY)
++            put("template_params", JSONObject().apply {
++                put("to_email", to)
++                put("code", code)
++                put("requester", requester)
++            })
++        }.toString()
++        val conn = (URL("https://api.emailjs.com/api/v1.0/email/send").openConnection() as HttpURLConnection).apply {
++            requestMethod = "POST"
++            doOutput = true
++            connectTimeout = 15000
++            readTimeout = 15000
++            setRequestProperty("Content-Type", "application/json")
++        }
++        conn.outputStream.use { it.write(body.toByteArray()) }
++        if (conn.responseCode in 200..299) null
++        else "Gagal kirim email (${conn.responseCode}): " +
++            conn.errorStream?.bufferedReader()?.readText().orEmpty().take(120)
++    } catch (e: Exception) {
++        "Tidak bisa mengirim email: ${e.localizedMessage}"
++    }
++}
+diff --git a/app/src/main/java/com/guild/games/data/Repo.kt b/app/src/main/java/com/guild/games/data/Repo.kt
+index 58ef448..ea456b6 100644
+--- a/app/src/main/java/com/guild/games/data/Repo.kt
++++ b/app/src/main/java/com/guild/games/data/Repo.kt
+@@ -24,7 +24,6 @@ data class Guild(
+ )
+ 
+ object Repo {
+-    const val DEV_CODE = "GUILD-DEV-2026"
+     private const val WRONG = "Username atau Password salah"
+     private const val NO_NET = "Tidak ada koneksi internet"
+ 
+diff --git a/app/src/main/java/com/guild/games/ui/Components.kt b/app/src/main/java/com/guild/games/ui/Components.kt
+index e04701c..4509c8b 100644
+--- a/app/src/main/java/com/guild/games/ui/Components.kt
++++ b/app/src/main/java/com/guild/games/ui/Components.kt
+@@ -1,7 +1,11 @@
+ package com.guild.games.ui
+ 
+-import androidx.compose.foundation.BorderStroke
++import androidx.compose.foundation.Image
++import androidx.compose.foundation.background
++import androidx.compose.foundation.border
++import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.*
++import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.foundation.text.KeyboardOptions
+ import androidx.compose.material3.*
+@@ -10,32 +14,65 @@ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.draw.shadow
+ import androidx.compose.ui.graphics.Brush
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.res.painterResource
++import androidx.compose.ui.text.TextStyle
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.input.KeyboardType
+ import androidx.compose.ui.text.input.PasswordVisualTransformation
+ import androidx.compose.ui.text.input.VisualTransformation
+-import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.unit.Dp
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import com.guild.games.R
+ import com.guild.games.ui.theme.*
+ 
+-val NeonBrush = Brush.horizontalGradient(listOf(NeonPurple, NeonBlue))
+-fun logoStyle(size: Int) = TextStyle(brush = NeonBrush, fontSize = size.sp, fontWeight = FontWeight.ExtraBold)
++@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
++fun logoStyle(size: Int) = TextStyle(
++    brush = NeonBrush,
++    fontSize = size.sp,
++    fontWeight = FontWeight.ExtraBold,
++    letterSpacing = 3.sp
++)
++
++fun Modifier.gameBackground(): Modifier = this.fillMaxSize().background(BgBrush)
++
++/** Kartu kaca: panel gelap dengan garis tepi gradien neon. */
++fun Modifier.glass(radius: Dp = 20.dp): Modifier {
++    val shape = RoundedCornerShape(radius)
++    return this
++        .clip(shape)
++        .background(Panel)
++        .border(
++            1.dp,
++            Brush.linearGradient(listOf(NeonPurple.copy(alpha = 0.6f), Stroke, NeonBlue.copy(alpha = 0.4f))),
++            shape
++        )
++}
++
++@Composable
++fun LogoMark(height: Dp) {
++    Image(
++        painterResource(R.drawable.ic_logo_mark),
++        contentDescription = "Guild Games",
++        modifier = Modifier.height(height).aspectRatio(60f / 70f)
++    )
++}
+ 
+ @Composable
+ private fun fieldColors() = OutlinedTextFieldDefaults.colors(
+     focusedTextColor = Color.White,
+     unfocusedTextColor = Color.White,
+     focusedBorderColor = NeonPurple,
+-    unfocusedBorderColor = Color(0xFF3A3A55),
++    unfocusedBorderColor = Stroke,
+     cursorColor = NeonBlue,
+-    focusedContainerColor = Surface,
+-    unfocusedContainerColor = Surface
++    focusedContainerColor = PanelHigh,
++    unfocusedContainerColor = PanelHigh
+ )
+ 
+ @Composable
+@@ -54,7 +91,7 @@ fun NeonField(
+         minLines = if (multiline) 3 else 1,
+         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+         modifier = Modifier.fillMaxWidth(),
+-        shape = RoundedCornerShape(14.dp),
++        shape = RoundedCornerShape(16.dp),
+         colors = fieldColors()
+     )
+ }
+@@ -79,56 +116,85 @@ fun PasswordField(value: String, onChange: (String) -> Unit, hint: String) {
+             }
+         },
+         modifier = Modifier.fillMaxWidth(),
+-        shape = RoundedCornerShape(14.dp),
++        shape = RoundedCornerShape(16.dp),
+         colors = fieldColors()
+     )
+ }
+ 
++/** Tombol utama: gradien ungu-biru dengan glow. */
+ @Composable
+ fun NeonButton(text: String, loading: Boolean = false, onClick: () -> Unit) {
+-    Button(
+-        onClick = onClick,
+-        enabled = !loading,
+-        modifier = Modifier.fillMaxWidth().height(56.dp),
+-        shape = RoundedCornerShape(16.dp),
+-        colors = ButtonDefaults.buttonColors(
+-            containerColor = NeonPurple,
+-            disabledContainerColor = NeonPurple.copy(alpha = 0.5f)
+-        )
++    val shape = RoundedCornerShape(18.dp)
++    Box(
++        Modifier.fillMaxWidth().height(56.dp)
++            .shadow(12.dp, shape, ambientColor = NeonPurple, spotColor = NeonPurple)
++            .clip(shape)
++            .background(ButtonBrush)
++            .clickable(enabled = !loading, onClick = onClick),
++        contentAlignment = Alignment.Center
+     ) {
+         if (loading) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+-        else Text(text, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
++        else Text(text, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, letterSpacing = 1.sp)
+     }
+ }
+ 
+ @Composable
+-fun OutlineNeonButton(text: String, onClick: () -> Unit) {
+-    OutlinedButton(
+-        onClick = onClick,
+-        modifier = Modifier.fillMaxWidth().height(52.dp),
+-        shape = RoundedCornerShape(16.dp),
+-        border = BorderStroke(1.5.dp, NeonPurple)
++fun OutlineNeonButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
++    val shape = RoundedCornerShape(18.dp)
++    val c = if (enabled) NeonPurple else TextDim
++    Box(
++        Modifier.fillMaxWidth().height(52.dp)
++            .clip(shape)
++            .border(1.5.dp, c, shape)
++            .clickable(enabled = enabled, onClick = onClick),
++        contentAlignment = Alignment.Center
+     ) {
+-        Text(text, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = NeonPurple)
++        Text(text, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = c)
+     }
+ }
+ 
+ @Composable
+ fun WhiteButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+-    Button(
+-        onClick = onClick,
+-        enabled = enabled,
+-        modifier = Modifier.fillMaxWidth().height(56.dp),
+-        shape = RoundedCornerShape(16.dp),
+-        colors = ButtonDefaults.buttonColors(containerColor = Color.White, disabledContainerColor = Color(0xFFCCCCCC))
++    val shape = RoundedCornerShape(18.dp)
++    Row(
++        Modifier.fillMaxWidth().height(54.dp)
++            .clip(shape)
++            .background(if (enabled) Color.White else Color(0xFFCCCCCC))
++            .clickable(enabled = enabled, onClick = onClick),
++        horizontalArrangement = Arrangement.Center,
++        verticalAlignment = Alignment.CenterVertically
+     ) {
+-        Text("G", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF4285F4))
++        Box(Modifier.size(28.dp).clip(CircleShape).background(Color(0xFFF1F3F4)), contentAlignment = Alignment.Center) {
++            Text("G", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF4285F4))
++        }
+         Spacer(Modifier.width(10.dp))
+         Text(text, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1F1F1F))
+     }
+ }
+ 
++@Composable
++fun OrDivider() {
++    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
++        Box(Modifier.weight(1f).height(1.dp).background(Stroke))
++        Text("  Atau  ", color = TextDim, fontSize = 13.sp)
++        Box(Modifier.weight(1f).height(1.dp).background(Stroke))
++    }
++}
++
+ @Composable
+ fun ErrorText(msg: String?) {
+-    if (msg != null) Text(msg, color = ErrorRed, fontSize = 14.sp, fontWeight = FontWeight.Medium)
++    if (msg != null) Text(
++        msg, color = ErrorRed, fontSize = 14.sp, fontWeight = FontWeight.Medium,
++        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
++            .background(ErrorRed.copy(alpha = 0.12f)).padding(12.dp)
++    )
++}
++
++@Composable
++fun InfoText(msg: String?) {
++    if (msg != null) Text(
++        msg, color = Success, fontSize = 14.sp, fontWeight = FontWeight.Medium,
++        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
++            .background(Success.copy(alpha = 0.12f)).padding(12.dp)
++    )
+ }
+diff --git a/app/src/main/java/com/guild/games/ui/CreateGuildScreen.kt b/app/src/main/java/com/guild/games/ui/CreateGuildScreen.kt
+index fb84126..2cd596d 100644
+--- a/app/src/main/java/com/guild/games/ui/CreateGuildScreen.kt
++++ b/app/src/main/java/com/guild/games/ui/CreateGuildScreen.kt
+@@ -3,7 +3,6 @@ package com.guild.games.ui
+ import android.net.Uri
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
+-import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.rememberScrollState
+@@ -40,48 +39,53 @@ fun CreateGuildScreen(onBack: () -> Unit) {
+     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { if (it != null) logo = it }
+ 
+     Column(
+-        Modifier.fillMaxSize().background(Bg).verticalScroll(rememberScrollState()).padding(24.dp),
++        Modifier.gameBackground().verticalScroll(rememberScrollState()).padding(22.dp),
+         verticalArrangement = Arrangement.spacedBy(14.dp)
+     ) {
+         Text("← Kembali", color = NeonBlue, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+             modifier = Modifier.clickable { onBack() }.padding(vertical = 8.dp))
+         Text("Buat Guild", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+ 
+-        Box(
+-            Modifier.align(Alignment.CenterHorizontally).size(104.dp).clip(RoundedCornerShape(20.dp))
+-                .background(Surface).clickable { picker.launch("image/*") },
+-            contentAlignment = Alignment.Center
+-        ) {
+-            if (logo != null) AsyncImage(logo, "Logo", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+-            else Text("Pilih\nLogo", color = NeonPurple, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+-        }
+-
+-        NeonField(name, { name = it }, "Nama Guild")
+-        NeonField(desc, { desc = it }, "Deskripsi", multiline = true)
+-        NeonField(req, { req = it }, "Syarat Masuk", multiline = true)
+-
+-        Text("Bintang", color = TextDim, fontSize = 14.sp)
+-        Row {
+-            for (i in 1..5) {
+-                Text("★", fontSize = 38.sp, color = if (i <= stars) Gold else Color(0xFF3A3A55),
+-                    modifier = Modifier.clickable { stars = i }.padding(end = 8.dp))
++        Column(Modifier.fillMaxWidth().glass(24.dp).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            Box(
++                Modifier.align(Alignment.CenterHorizontally).size(108.dp).clip(RoundedCornerShape(24.dp))
++                    .background(NeonBrush).padding(2.dp)
++            ) {
++                Box(
++                    Modifier.fillMaxSize().clip(RoundedCornerShape(22.dp)).background(PanelHigh)
++                        .clickable { picker.launch("image/*") },
++                    contentAlignment = Alignment.Center
++                ) {
++                    if (logo != null) AsyncImage(logo, "Logo", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
++                    else Text("+\nPilih Logo", color = NeonPurple, fontWeight = FontWeight.Bold, fontSize = 14.sp,
++                        textAlign = androidx.compose.ui.text.style.TextAlign.Center)
++                }
+             }
+-        }
+-
+-        NeonField(maxStr, { maxStr = it.filter(Char::isDigit) }, "Max Anggota", KeyboardType.Number)
+-        ErrorText(error)
++            NeonField(name, { name = it }, "Nama Guild")
++            NeonField(desc, { desc = it }, "Deskripsi", multiline = true)
++            NeonField(req, { req = it }, "Syarat Masuk", multiline = true)
+ 
+-        NeonButton("SIMPAN GUILD", loading) {
+-            val max = maxStr.toIntOrNull()
+-            when {
+-                name.isBlank() || desc.isBlank() || req.isBlank() || maxStr.isBlank() -> error = "Harap isi semua kolom"
+-                max == null || max < 1 -> error = "Max Anggota minimal 1"
+-                else -> scope.launch {
+-                    error = null
+-                    loading = true
+-                    val e = Repo.createGuild(name, logo, desc, req, stars, max)
+-                    loading = false
+-                    if (e == null) onBack() else error = e
++            Text("Bintang Guild", color = TextDim, fontSize = 14.sp)
++            Row {
++                for (i in 1..5) {
++                    Text("★", fontSize = 38.sp, color = if (i <= stars) Gold else Stroke,
++                        modifier = Modifier.clickable { stars = i }.padding(end = 8.dp))
++                }
++            }
++            NeonField(maxStr, { maxStr = it.filter(Char::isDigit) }, "Max Anggota", KeyboardType.Number)
++            ErrorText(error)
++            NeonButton("SIMPAN GUILD", loading) {
++                val max = maxStr.toIntOrNull()
++                when {
++                    name.isBlank() || desc.isBlank() || req.isBlank() || maxStr.isBlank() -> error = "Harap isi semua kolom"
++                    max == null || max < 1 -> error = "Max Anggota minimal 1"
++                    else -> scope.launch {
++                        error = null
++                        loading = true
++                        val e = Repo.createGuild(name, logo, desc, req, stars, max)
++                        loading = false
++                        if (e == null) onBack() else error = e
++                    }
+                 }
+             }
+         }
+diff --git a/app/src/main/java/com/guild/games/ui/LoginScreen.kt b/app/src/main/java/com/guild/games/ui/LoginScreen.kt
+index 4551fec..e816228 100644
+--- a/app/src/main/java/com/guild/games/ui/LoginScreen.kt
++++ b/app/src/main/java/com/guild/games/ui/LoginScreen.kt
+@@ -2,7 +2,6 @@ package com.guild.games.ui
+ 
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
+-import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.rememberScrollState
+@@ -12,9 +11,11 @@ import androidx.compose.runtime.*
+ import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.input.KeyboardType
++import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import com.google.android.gms.auth.api.signin.GoogleSignIn
+@@ -60,48 +61,48 @@ fun LoginScreen(onSuccess: () -> Unit, onRegister: () -> Unit, onRegisterDev: ()
+     }
+ 
+     Column(
+-        Modifier.fillMaxSize().background(Bg).verticalScroll(rememberScrollState()).padding(24.dp),
++        Modifier.gameBackground().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp),
+         horizontalAlignment = Alignment.CenterHorizontally,
+-        verticalArrangement = Arrangement.spacedBy(14.dp)
++        verticalArrangement = Arrangement.spacedBy(12.dp)
+     ) {
+-        Spacer(Modifier.height(24.dp))
+-        Text("GUILD GAMES", style = logoStyle(30))
+-        Spacer(Modifier.height(8.dp))
+-        Text("Selamat Datang di Guild Games", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = androidx.compose.ui.graphics.Color.White)
+-        Text("Login untuk lanjut main bareng guild", fontSize = 14.sp, color = TextDim)
+-        Spacer(Modifier.height(8.dp))
++        Spacer(Modifier.height(28.dp))
++        LogoMark(72.dp)
++        Text("GUILD GAMES", style = logoStyle(24))
++        Text("Selamat Datang di Guild Games", fontSize = 21.sp, fontWeight = FontWeight.ExtraBold,
++            color = Color.White, textAlign = TextAlign.Center)
++        Text("Login untuk lanjut main bareng guild", fontSize = 14.sp, color = TextDim, textAlign = TextAlign.Center)
++        Spacer(Modifier.height(4.dp))
+ 
+-        NeonField(username, { username = it }, "Masukkan Username")
+-        NeonField(gmail, { gmail = it }, "Masukkan Gmail", KeyboardType.Email)
+-        PasswordField(password, { password = it }, "Masukkan Password")
+-        ErrorText(error)
+-
+-        NeonButton("LOGIN", loading) {
+-            if (username.isBlank() || gmail.isBlank() || password.isBlank()) {
+-                error = "Harap isi semua kolom"
+-            } else scope.launch {
++        Column(Modifier.fillMaxWidth().glass(24.dp).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            NeonField(username, { username = it }, "Masukkan Username")
++            NeonField(gmail, { gmail = it }, "Masukkan Gmail", KeyboardType.Email)
++            PasswordField(password, { password = it }, "Masukkan Password")
++            ErrorText(error)
++            NeonButton("LOGIN", loading) {
++                if (username.isBlank() || gmail.isBlank() || password.isBlank()) {
++                    error = "Harap isi semua kolom"
++                } else scope.launch {
++                    error = null
++                    loading = true
++                    val e = Repo.login(username, gmail, password)
++                    loading = false
++                    if (e == null) onSuccess() else error = e
++                }
++            }
++            OrDivider()
++            WhiteButton("Login dengan Gmail", enabled = !loading) {
+                 error = null
+-                loading = true
+-                val e = Repo.login(username, gmail, password)
+-                loading = false
+-                if (e == null) onSuccess() else error = e
++                googleClient.signOut().addOnCompleteListener { googleLauncher.launch(googleClient.signInIntent) }
+             }
+         }
+ 
+-        Text("Atau", color = TextDim, fontSize = 14.sp)
+-
+-        WhiteButton("Login dengan Gmail", enabled = !loading) {
+-            error = null
+-            googleClient.signOut().addOnCompleteListener { googleLauncher.launch(googleClient.signInIntent) }
+-        }
+-
+-        Spacer(Modifier.height(8.dp))
++        Spacer(Modifier.height(4.dp))
+         Row {
+             Text("Belum punya akun? ", color = TextDim, fontSize = 14.sp)
+             Text("Daftar Akun", color = NeonBlue, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                 modifier = Modifier.clickable { onRegister() })
+         }
+-        OutlineNeonButton("Daftar Sebagai Developer", onRegisterDev)
+-        Spacer(Modifier.height(16.dp))
++        OutlineNeonButton("Daftar Sebagai Developer") { onRegisterDev() }
++        Spacer(Modifier.height(20.dp))
+     }
+ }
+diff --git a/app/src/main/java/com/guild/games/ui/MainScreen.kt b/app/src/main/java/com/guild/games/ui/MainScreen.kt
+index 21b5489..bcd382e 100644
+--- a/app/src/main/java/com/guild/games/ui/MainScreen.kt
++++ b/app/src/main/java/com/guild/games/ui/MainScreen.kt
+@@ -13,9 +13,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
++import androidx.compose.ui.draw.shadow
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextAlign
+ import androidx.compose.ui.text.style.TextOverflow
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+@@ -32,88 +34,128 @@ fun MainScreen(onCreateGuild: () -> Unit, onLogout: () -> Unit) {
+     val guilds by remember { Repo.observeGuilds() }.collectAsState(initial = emptyList())
+     val canCreate = role == "developer" || role == "admin"
+ 
+-    Column(Modifier.fillMaxSize().background(Bg)) {
++    Column(Modifier.gameBackground()) {
+         Row(
+-            Modifier.fillMaxWidth().background(Surface).padding(horizontal = 8.dp, vertical = 4.dp),
+-            verticalAlignment = Alignment.CenterVertically
++            Modifier.fillMaxWidth().padding(12.dp),
++            verticalAlignment = Alignment.CenterVertically,
++            horizontalArrangement = Arrangement.spacedBy(10.dp)
+         ) {
+-            listOf("Guild", "Announcement", "Helper").forEachIndexed { i, t ->
+-                TabItem(t, tab == i, Modifier.weight(1f)) { tab = i }
+-            }
+-            if (canCreate) {
+-                Box(
+-                    Modifier.padding(start = 4.dp).size(44.dp).clip(CircleShape)
+-                        .background(NeonPurple).clickable { onCreateGuild() },
+-                    contentAlignment = Alignment.Center
+-                ) { Text("+", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color.White) }
++            Row(Modifier.weight(1f).glass(26.dp).padding(4.dp)) {
++                listOf("Guild", "Announcement", "Helper").forEachIndexed { i, t ->
++                    TabPill(t, tab == i, Modifier.weight(1f)) { tab = i }
++                }
+             }
++            if (canCreate) PlusButton(onCreateGuild)
+         }
+         when (tab) {
+-            0 -> if (guilds.isEmpty()) Centered("Belum ada Guild") else
+-                LazyColumn(
+-                    Modifier.fillMaxSize(),
+-                    contentPadding = PaddingValues(16.dp),
+-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+-                ) { items(guilds, key = { it.id }) { GuildCard(it) } }
+-            1 -> Centered("Belum ada Announcement")
++            0 -> if (guilds.isEmpty()) EmptyState("🛡️", "Belum ada Guild",
++                if (canCreate) "Ketuk tombol + untuk membuat guild pertama"
++                else "Guild akan muncul di sini setelah dibuat")
++            else LazyColumn(
++                Modifier.fillMaxSize(),
++                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp, top = 4.dp),
++                verticalArrangement = Arrangement.spacedBy(14.dp)
++            ) { items(guilds, key = { it.id }) { GuildCard(it) } }
++            1 -> EmptyState("📢", "Belum ada Announcement", "Pengumuman guild akan tampil di sini")
+             else -> Column(
+                 Modifier.fillMaxSize().padding(24.dp),
+                 verticalArrangement = Arrangement.Center,
+                 horizontalAlignment = Alignment.CenterHorizontally
+             ) {
+-                Text("Helper segera hadir", color = TextDim, fontSize = 16.sp)
+-                Spacer(Modifier.height(24.dp))
+-                OutlineNeonButton("Keluar", onLogout)
++                Text("🛠️", fontSize = 48.sp)
++                Spacer(Modifier.height(8.dp))
++                Text("Helper segera hadir", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
++                Spacer(Modifier.height(28.dp))
++                OutlineNeonButton("Keluar") { onLogout() }
+             }
+         }
+     }
+ }
+ 
+ @Composable
+-private fun TabItem(title: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
++private fun PlusButton(onClick: () -> Unit) {
++    Box(
++        Modifier.size(48.dp)
++            .shadow(10.dp, CircleShape, ambientColor = NeonPurple, spotColor = NeonPurple)
++            .clip(CircleShape).background(ButtonBrush).clickable { onClick() },
++        contentAlignment = Alignment.Center
++    ) { Text("+", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White) }
++}
++
++@Composable
++private fun TabPill(title: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
++    Box(
++        modifier.clip(RoundedCornerShape(22.dp))
++            .then(if (selected) Modifier.background(ButtonBrush) else Modifier)
++            .clickable { onClick() }
++            .padding(vertical = 11.dp),
++        contentAlignment = Alignment.Center
++    ) {
++        Text(title, maxLines = 1, softWrap = false, fontSize = 11.sp, fontWeight = FontWeight.Bold,
++            color = if (selected) Color.White else TextDim)
++    }
++}
++
++@Composable
++private fun EmptyState(icon: String, title: String, hint: String) {
+     Column(
+-        modifier.clickable { onClick() }.padding(vertical = 10.dp),
++        Modifier.fillMaxSize().padding(32.dp),
++        verticalArrangement = Arrangement.Center,
+         horizontalAlignment = Alignment.CenterHorizontally
+     ) {
+-        Text(title, maxLines = 1, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+-            color = if (selected) NeonPurple else TextDim)
++        Text(icon, fontSize = 56.sp)
++        Spacer(Modifier.height(10.dp))
++        Text(title, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+         Spacer(Modifier.height(6.dp))
+-        Box(Modifier.height(3.dp).width(28.dp).clip(RoundedCornerShape(2.dp))
+-            .background(if (selected) NeonPurple else Color.Transparent))
++        Text(hint, color = TextDim, fontSize = 14.sp, textAlign = TextAlign.Center)
+     }
+ }
+ 
+ @Composable
+-private fun Centered(text: String) {
+-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+-        Text(text, color = TextDim, fontSize = 16.sp)
+-    }
++private fun Chip(text: String, color: Color, modifier: Modifier = Modifier) {
++    Text(
++        text, color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium,
++        maxLines = 1, overflow = TextOverflow.Ellipsis,
++        modifier = modifier.clip(RoundedCornerShape(10.dp))
++            .background(color.copy(alpha = 0.12f)).padding(horizontal = 10.dp, vertical = 5.dp)
++    )
+ }
+ 
+ @Composable
+ private fun GuildCard(g: Guild) {
+-    Row(
+-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Surface).padding(14.dp),
+-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+-    ) {
+-        Box(Modifier.size(60.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF22223A)),
+-            contentAlignment = Alignment.Center) {
+-            if (g.logoUrl.isNotEmpty())
+-                AsyncImage(g.logoUrl, g.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+-            else Text(g.name.take(1).uppercase(), fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = NeonPurple)
+-        }
+-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+-            Text(g.name, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1,
+-                overflow = TextOverflow.Ellipsis)
+-            Row {
+-                repeat(5) { i -> Text("★", fontSize = 14.sp, color = if (i < g.stars) Gold else Color(0xFF3A3A55)) }
+-                Spacer(Modifier.width(8.dp))
+-                Text("${g.memberCount}/${g.maxMembers} anggota", fontSize = 12.sp, color = NeonBlue)
++    val fraction = if (g.maxMembers > 0) (g.memberCount.toFloat() / g.maxMembers).coerceIn(0f, 1f) else 0f
++    Column(Modifier.fillMaxWidth().glass().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
++        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
++            Box(Modifier.size(64.dp).clip(RoundedCornerShape(18.dp)).background(NeonBrush).padding(2.dp)) {
++                Box(
++                    Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)).background(PanelHigh),
++                    contentAlignment = Alignment.Center
++                ) {
++                    if (g.logoUrl.isNotEmpty())
++                        AsyncImage(g.logoUrl, g.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
++                    else Text(g.name.take(1).uppercase(), fontSize = 26.sp, fontWeight = FontWeight.ExtraBold,
++                        color = NeonPurple)
++                }
++            }
++            Column(Modifier.weight(1f)) {
++                Text(g.name, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
++                    maxLines = 1, overflow = TextOverflow.Ellipsis)
++                Row {
++                    repeat(5) { i ->
++                        Text("★", fontSize = 16.sp, color = if (i < g.stars) Gold else Stroke)
++                    }
++                }
+             }
+-            Text(g.description, fontSize = 13.sp, color = TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
++        }
++        if (g.description.isNotBlank())
++            Text(g.description, fontSize = 13.sp, color = TextDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
++        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++            Chip("👥 ${g.memberCount}/${g.maxMembers}", NeonBlue)
+             if (g.requirements.isNotBlank())
+-                Text("Syarat: ${g.requirements}", fontSize = 12.sp, color = TextDim, maxLines = 1,
+-                    overflow = TextOverflow.Ellipsis)
++                Chip("📋 ${g.requirements}", NeonPurple, Modifier.weight(1f, fill = false))
++        }
++        Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(Stroke)) {
++            Box(Modifier.fillMaxWidth(fraction).fillMaxHeight().background(NeonBrush))
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/guild/games/ui/RegisterScreen.kt b/app/src/main/java/com/guild/games/ui/RegisterScreen.kt
+index 256e6b7..3b518e4 100644
+--- a/app/src/main/java/com/guild/games/ui/RegisterScreen.kt
++++ b/app/src/main/java/com/guild/games/ui/RegisterScreen.kt
+@@ -1,7 +1,6 @@
+ package com.guild.games.ui
+ 
+ import android.util.Patterns
+-import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.rememberScrollState
+@@ -9,14 +8,18 @@ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.*
+ import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.input.KeyboardType
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
++import com.guild.games.data.Config
++import com.guild.games.data.DevCode
+ import com.guild.games.data.Repo
+ import com.guild.games.ui.theme.*
++import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ 
+ @Composable
+@@ -36,36 +39,93 @@ private fun RegisterForm(developer: Boolean, onSuccess: () -> Unit, onBack: () -
+     var confirm by rememberSaveable { mutableStateOf("") }
+     var code by rememberSaveable { mutableStateOf("") }
+     var error by remember { mutableStateOf<String?>(null) }
++    var info by remember { mutableStateOf<String?>(null) }
+     var loading by remember { mutableStateOf(false) }
++    var sending by remember { mutableStateOf(false) }
++    var cooldown by remember { mutableIntStateOf(0) }
++
++    LaunchedEffect(cooldown) {
++        if (cooldown > 0) {
++            delay(1000)
++            cooldown -= 1
++        }
++    }
+ 
+     Column(
+-        Modifier.fillMaxSize().background(Bg).verticalScroll(rememberScrollState()).padding(24.dp),
++        Modifier.gameBackground().verticalScroll(rememberScrollState()).padding(22.dp),
+         verticalArrangement = Arrangement.spacedBy(14.dp)
+     ) {
+         Text("← Kembali", color = NeonBlue, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+             modifier = Modifier.clickable { onBack() }.padding(vertical = 8.dp))
+-        Text(if (developer) "Daftar Developer" else "Daftar Akun", fontSize = 26.sp,
+-            fontWeight = FontWeight.ExtraBold, color = Color.White)
+-        Text(if (developer) "Khusus pengembang Guild Games" else "Buat akun untuk bergabung ke guild",
+-            fontSize = 14.sp, color = TextDim)
+-        Spacer(Modifier.height(4.dp))
++        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
++            LogoMark(48.dp)
++            Column {
++                Text(if (developer) "Daftar Developer" else "Daftar Akun", fontSize = 24.sp,
++                    fontWeight = FontWeight.ExtraBold, color = Color.White)
++                Text(if (developer) "Verifikasi lewat kode Gmail" else "Buat akun untuk gabung guild",
++                    fontSize = 13.sp, color = TextDim)
++            }
++        }
++
++        Column(Modifier.fillMaxWidth().glass(24.dp).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            NeonField(username, { username = it }, "Username")
++            NeonField(gmail, { gmail = it }, "Gmail", KeyboardType.Email)
++            PasswordField(password, { password = it }, "Password")
++            PasswordField(confirm, { confirm = it }, "Konfirmasi Password")
+ 
+-        NeonField(username, { username = it }, "Username")
+-        NeonField(gmail, { gmail = it }, "Gmail", KeyboardType.Email)
+-        PasswordField(password, { password = it }, "Password")
+-        PasswordField(confirm, { confirm = it }, "Konfirmasi Password")
+-        if (developer) NeonField(code, { code = it }, "Kode Developer")
+-        ErrorText(error)
++            if (developer) {
++                OutlineNeonButton(
++                    text = when {
++                        sending -> "Mengirim..."
++                        cooldown > 0 -> "Kirim ulang (${cooldown}s)"
++                        else -> "Kirim Kode ke Gmail"
++                    },
++                    enabled = !sending && cooldown == 0
++                ) {
++                    if (!Patterns.EMAIL_ADDRESS.matcher(gmail.trim()).matches()) {
++                        error = "Isi Gmail yang valid dulu"
++                        info = null
++                    } else scope.launch {
++                        error = null
++                        info = null
++                        sending = true
++                        val e = DevCode.request(gmail)
++                        sending = false
++                        if (e == null) {
++                            info = if (Config.APPROVER_EMAIL.isBlank())
++                                "Kode dikirim ke ${gmail.trim()}. Cek Inbox atau Spam."
++                            else "Kode dikirim ke pemilik aplikasi. Minta kodenya ke pemilik."
++                            cooldown = 60
++                        } else error = e
++                    }
++                }
++                NeonField(code, { code = it.filter(Char::isDigit).take(6) }, "Kode Developer (6 angka)", KeyboardType.Number)
++                InfoText(info)
++            }
++
++            ErrorText(error)
+ 
+-        NeonButton("DAFTAR", loading) {
+-            when {
+-                username.isBlank() || gmail.isBlank() || password.isBlank() || confirm.isBlank() ||
+-                    (developer && code.isBlank()) -> error = "Harap isi semua kolom"
+-                developer && code.trim() != Repo.DEV_CODE -> error = "Kode Developer Salah"
+-                !Patterns.EMAIL_ADDRESS.matcher(gmail.trim()).matches() -> error = "Format Gmail tidak valid"
+-                password.length < 6 -> error = "Password minimal 6 karakter"
+-                password != confirm -> error = "Konfirmasi Password tidak sama"
+-                else -> scope.launch {
++            NeonButton("DAFTAR", loading) {
++                val err = when {
++                    username.isBlank() || gmail.isBlank() || password.isBlank() || confirm.isBlank() ||
++                        (developer && code.isBlank()) -> "Harap isi semua kolom"
++                    !Patterns.EMAIL_ADDRESS.matcher(gmail.trim()).matches() -> "Format Gmail tidak valid"
++                    password.length < 6 -> "Password minimal 6 karakter"
++                    password != confirm -> "Konfirmasi Password tidak sama"
++                    else -> null
++                }
++                if (err != null) {
++                    error = err
++                    return@NeonButton
++                }
++                if (developer) {
++                    val codeErr = DevCode.verify(gmail, code)
++                    if (codeErr != null) {
++                        error = codeErr
++                        return@NeonButton
++                    }
++                }
++                scope.launch {
+                     error = null
+                     loading = true
+                     val e = Repo.register(username, gmail, password, if (developer) "developer" else "anggota")
+diff --git a/app/src/main/java/com/guild/games/ui/SplashScreen.kt b/app/src/main/java/com/guild/games/ui/SplashScreen.kt
+index 2d352b6..cbbccaf 100644
+--- a/app/src/main/java/com/guild/games/ui/SplashScreen.kt
++++ b/app/src/main/java/com/guild/games/ui/SplashScreen.kt
+@@ -1,32 +1,54 @@
+ package com.guild.games.ui
+ 
+-import androidx.compose.foundation.background
++import androidx.compose.animation.core.Animatable
++import androidx.compose.animation.core.LinearEasing
++import androidx.compose.animation.core.tween
+ import androidx.compose.foundation.layout.*
+-import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.LinearProgressIndicator
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.remember
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.graphicsLayer
+ import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
+ import com.google.firebase.auth.FirebaseAuth
+ import com.guild.games.ui.theme.*
+-import kotlinx.coroutines.delay
++import kotlinx.coroutines.launch
+ 
+ @Composable
+ fun SplashScreen(onFinish: (loggedIn: Boolean) -> Unit) {
++    val progress = remember { Animatable(0f) }
++    val scale = remember { Animatable(0.7f) }
+     LaunchedEffect(Unit) {
+-        delay(2000)
++        launch { scale.animateTo(1f, tween(700)) }
++        progress.animateTo(1f, tween(2000, easing = LinearEasing))
+         onFinish(FirebaseAuth.getInstance().currentUser != null)
+     }
+     Column(
+-        Modifier.fillMaxSize().background(Bg),
++        Modifier.gameBackground(),
+         verticalArrangement = Arrangement.Center,
+         horizontalAlignment = Alignment.CenterHorizontally
+     ) {
+-        Text("GUILD", style = logoStyle(48))
+-        Text("GAMES", style = logoStyle(48))
+-        Spacer(Modifier.height(32.dp))
+-        CircularProgressIndicator(color = NeonPurple, strokeWidth = 3.dp, modifier = Modifier.size(32.dp))
++        Box(Modifier.graphicsLayer {
++            scaleX = scale.value
++            scaleY = scale.value
++            alpha = ((scale.value - 0.7f) / 0.3f).coerceIn(0f, 1f)
++        }) { LogoMark(110.dp) }
++        Spacer(Modifier.height(24.dp))
++        Text("GUILD GAMES", style = logoStyle(34))
++        Spacer(Modifier.height(6.dp))
++        Text("Main bareng, menang bareng", color = TextDim, fontSize = 13.sp)
++        Spacer(Modifier.height(40.dp))
++        LinearProgressIndicator(
++            progress = { progress.value },
++            modifier = Modifier.width(180.dp).height(4.dp).clip(RoundedCornerShape(2.dp)),
++            color = NeonPurple,
++            trackColor = Stroke
++        )
+     }
+ }
+diff --git a/app/src/main/java/com/guild/games/ui/theme/Theme.kt b/app/src/main/java/com/guild/games/ui/theme/Theme.kt
+index d0da578..a40b7d3 100644
+--- a/app/src/main/java/com/guild/games/ui/theme/Theme.kt
++++ b/app/src/main/java/com/guild/games/ui/theme/Theme.kt
+@@ -3,21 +3,31 @@ package com.guild.games.ui.theme
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.darkColorScheme
+ import androidx.compose.runtime.Composable
++import androidx.compose.ui.graphics.Brush
+ import androidx.compose.ui.graphics.Color
+ 
+-val Bg = Color(0xFF0A0A0F)
+-val Surface = Color(0xFF14141F)
++val Bg = Color(0xFF07070C)
++val BgTop = Color(0xFF16082E)
++val Panel = Color(0xFF12121C)
++val PanelHigh = Color(0xFF1B1B2B)
++val Stroke = Color(0xFF2E2E48)
+ val NeonPurple = Color(0xFFB026FF)
+ val NeonBlue = Color(0xFF00D4FF)
++val ElectricBlue = Color(0xFF2F6BFF)
+ val TextDim = Color(0xFF8A8AA3)
+ val Gold = Color(0xFFFFC83D)
+ val ErrorRed = Color(0xFFFF5470)
++val Success = Color(0xFF2EE6A6)
++
++val BgBrush = Brush.verticalGradient(listOf(BgTop, Bg, Bg))
++val ButtonBrush = Brush.horizontalGradient(listOf(Color(0xFFA020F0), ElectricBlue))
++val NeonBrush = Brush.horizontalGradient(listOf(NeonPurple, NeonBlue))
+ 
+ private val Scheme = darkColorScheme(
+     primary = NeonPurple,
+     secondary = NeonBlue,
+     background = Bg,
+-    surface = Surface,
++    surface = Panel,
+     onPrimary = Color.White,
+     onBackground = Color.White,
+     onSurface = Color.White
+diff --git a/app/src/main/res/drawable/ic_launcher_background.xml b/app/src/main/res/drawable/ic_launcher_background.xml
+new file mode 100644
+index 0000000..01d8ba9
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_launcher_background.xml
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:aapt="http://schemas.android.com/aapt"
++    android:width="108dp" android:height="108dp"
++    android:viewportWidth="108" android:viewportHeight="108">
++    <path android:pathData="M0,0h108v108h-108z">
++        <aapt:attr name="android:fillColor">
++            <gradient android:type="linear" android:startX="0" android:startY="0" android:endX="108" android:endY="108">
++                <item android:offset="0" android:color="#FF2A0F52"/>
++                <item android:offset="0.55" android:color="#FF0C0818"/>
++                <item android:offset="1" android:color="#FF05050A"/>
++            </gradient>
++        </aapt:attr>
++    </path>
++    <path android:fillColor="#26B026FF" android:pathData="M54,16a38,38 0 1,0 0,76a38,38 0 1,0 0,-76z"/>
++    <path android:fillColor="#1A00D4FF" android:pathData="M0,78L108,38L108,48L0,88z"/>
++</vector>
+diff --git a/app/src/main/res/drawable/ic_launcher_foreground.xml b/app/src/main/res/drawable/ic_launcher_foreground.xml
+new file mode 100644
+index 0000000..9aa6bed
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_launcher_foreground.xml
+@@ -0,0 +1,18 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:aapt="http://schemas.android.com/aapt"
++    android:width="108dp" android:height="108dp"
++    android:viewportWidth="108" android:viewportHeight="108">
++    <group android:translateX="30" android:translateY="26" android:scaleX="0.8" android:scaleY="0.8">
++        <path android:pathData="M30,2L56,10L56,36C56,52 44,62 30,68C16,62 4,52 4,36L4,10Z">
++            <aapt:attr name="android:fillColor">
++                <gradient android:type="linear" android:startX="4" android:startY="2" android:endX="56" android:endY="68">
++                    <item android:offset="0" android:color="#FFC13BFF"/>
++                    <item android:offset="1" android:color="#FF2F8BFF"/>
++                </gradient>
++            </aapt:attr>
++        </path>
++        <path android:fillColor="#FF0A0A12" android:pathData="M30,10L48,16L48,35C48,45 41,52 30,57C19,52 12,45 12,35L12,16Z"/>
++        <path android:fillColor="#FF00D4FF" android:pathData="M33,18L21,38L29,38L26,52L40,31L32,31L36,18Z"/>
++    </group>
++</vector>
+diff --git a/app/src/main/res/drawable/ic_logo_mark.xml b/app/src/main/res/drawable/ic_logo_mark.xml
+new file mode 100644
+index 0000000..53f5830
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_logo_mark.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="60dp" android:height="70dp"
++    android:viewportWidth="60" android:viewportHeight="70">
++    <path android:fillColor="#FFB026FF" android:pathData="M30,2L56,10L56,36C56,52 44,62 30,68C16,62 4,52 4,36L4,10Z"/>
++    <path android:fillColor="#FF0A0A12" android:pathData="M30,10L48,16L48,35C48,45 41,52 30,57C19,52 12,45 12,35L12,16Z"/>
++    <path android:fillColor="#FF00D4FF" android:pathData="M33,18L21,38L29,38L26,52L40,31L32,31L36,18Z"/>
++</vector>
+diff --git a/app/src/main/res/mipmap-anydpi-v24/ic_launcher.xml b/app/src/main/res/mipmap-anydpi-v24/ic_launcher.xml
+new file mode 100644
+index 0000000..381d301
+--- /dev/null
++++ b/app/src/main/res/mipmap-anydpi-v24/ic_launcher.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
++    <item android:drawable="@drawable/ic_launcher_background"/>
++    <item android:drawable="@drawable/ic_launcher_foreground"/>
++</layer-list>
+diff --git a/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml b/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+new file mode 100644
+index 0000000..d378acd
+--- /dev/null
++++ b/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
++    <background android:drawable="@drawable/ic_launcher_background"/>
++    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
++</adaptive-icon>
