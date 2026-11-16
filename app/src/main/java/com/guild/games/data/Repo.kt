@@ -24,7 +24,6 @@ data class Guild(
 )
 
 object Repo {
-    const val DEV_CODE = "GUILD-DEV-2026"
     private const val WRONG = "Username atau Password salah"
     private const val NO_NET = "Tidak ada koneksi internet"
 
