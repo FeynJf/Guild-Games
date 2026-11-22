@@ -5,40 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # Taruh file *.patch di root repo, lalu push: patch diterapkan otomatis, file patch dihapus,
-      # dan build di bawah langsung memakai kode yang sudah di-patch (satu run, satu workflow).
-      - name: Terapkan patch (jika ada)
-        run: |
-          shopt -s nullglob
-          patches=(*.patch *.PATCH)
-          if [ ${#patches[@]} -eq 0 ]; then echo "Tidak ada file patch."; exit 0; fi
-          for p in "${patches[@]}"; do
-            echo "== $p"
-            if git apply --check --exclude='.github/*' "$p" 2>/dev/null; then
-              git apply --exclude='.github/*' "$p"
-              echo "Diterapkan: $p"
-            elif git apply --check -R --exclude='.github/*' "$p" 2>/dev/null; then
-              echo "::warning::$p sudah pernah diterapkan, hanya dihapus."
-            else
-              echo "::error::$p gagal diterapkan (kode di repo berbeda dari yang diharapkan patch)."
-              exit 1
-            fi
-            git rm -q -f "$p"
-          done
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Terapkan patch: ${patches[*]}"
-          git push
 
       - uses: actions/setup-java@v4
         with:
@@ -55,31 +26,10 @@ jobs:
           KEYSTORE_PASSWORD: 3x0QdC4oMXHoZxLI
           KEY_ALIAS: guild
           KEY_PASSWORD: 3x0QdC4oMXHoZxLI
-          EMAILJS_SERVICE_ID: ${{ secrets.EMAILJS_SERVICE_ID }}
-          EMAILJS_TEMPLATE_ID: ${{ secrets.EMAILJS_TEMPLATE_ID }}
-          EMAILJS_PUBLIC_KEY: ${{ secrets.EMAILJS_PUBLIC_KEY }}
-          APPROVER_EMAIL: ${{ secrets.APPROVER_EMAIL }}
+          EMAILJS_PRIVATE_KEY: ${{ secrets.EMAILJS_PRIVATE_KEY }}
         run: gradle assembleRelease --no-daemon
-
-      - name: Siapkan APK rilis
-        id: ver
-        run: |
-          VN=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
-          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
-          cp "$APK" "GuildGames-v$VN.apk"
-          echo "name=$VN" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: GuildGames-APK
           path: app/build/outputs/apk/**/*.apk
-
-      # Aplikasi mengecek rilis terbaru di sini (Pengaturan > Pembaruan Aplikasi).
-      - name: Publikasikan rilis GitHub
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.ver.outputs.name }}
-          name: Guild Games v${{ steps.ver.outputs.name }}
-          body_path: RELEASE_NOTES.md
-          files: GuildGames-v${{ steps.ver.outputs.name }}.apk
-          make_latest: true
