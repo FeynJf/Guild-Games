@@ -5,11 +5,7 @@ plugins {
 }
 
 val ksPath: String? = System.getenv("KEYSTORE_PATH")
-
-/** Baca nilai rahasia dari env (GitHub Secrets) atau gradle.properties lokal, aman untuk string BuildConfig. */
-fun secret(name: String): String =
-    (System.getenv(name) ?: providers.gradleProperty(name).orNull ?: "")
-        .replace("\\", "\\\\").replace("\"", "\\\"")
+val emailPrivateKey: String = System.getenv("EMAILJS_PRIVATE_KEY") ?: ""
 
 android {
     namespace = "com.guild.games"
@@ -17,15 +13,11 @@ android {
 
     defaultConfig {
         applicationId = "com.guild.games"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
-
-        buildConfigField("String", "EMAILJS_SERVICE_ID", "\"${secret("EMAILJS_SERVICE_ID")}\"")
-        buildConfigField("String", "EMAILJS_TEMPLATE_ID", "\"${secret("EMAILJS_TEMPLATE_ID")}\"")
-        buildConfigField("String", "EMAILJS_PUBLIC_KEY", "\"${secret("EMAILJS_PUBLIC_KEY")}\"")
-        buildConfigField("String", "APPROVER_EMAIL", "\"${secret("APPROVER_EMAIL")}\"")
+        versionCode = 2
+        versionName = "1.1"
+        buildConfigField("String", "EMAILJS_PRIVATE_KEY", "\"$emailPrivateKey\"")
     }
 
     signingConfigs {
