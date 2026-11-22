@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -24,17 +25,68 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.guild.games.data.Guild
 import com.guild.games.data.Repo
+import com.guild.games.data.UpdateManager
+import com.guild.games.data.UpdateUi
+import com.guild.games.data.UserProfile
 import com.guild.games.ui.theme.*
 
 @Composable
-fun MainScreen(onCreateGuild: () -> Unit, onLogout: () -> Unit) {
-    var role by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) { role = Repo.currentRole() }
+fun MainScreen(onCreateGuild: () -> Unit, onProfile: () -> Unit, onSettings: () -> Unit, onLogout: () -> Unit) {
+    val ctx = LocalContext.current
+    var profile by remember { mutableStateOf<UserProfile?>(null) }
+    LaunchedEffect(Unit) {
+        UpdateManager.autoCheckOnce(ctx)
+        profile = Repo.loadProfile()
+    }
+    val role = profile?.role.orEmpty()
+    val update by UpdateManager.state.collectAsState()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val guilds by remember { Repo.observeGuilds() }.collectAsState(initial = emptyList())
     val canCreate = role == "developer" || role == "admin"
 
+    val banner: Pair<String, String>? = when (val u = update) {
+        is UpdateUi.Available -> "Pembaruan ${u.info.versionName} tersedia" to "Ketuk untuk mengunduh"
+        is UpdateUi.Downloading ->
+            "Mengunduh pembaruan…" to "${if (u.total > 0) (u.done * 100 / u.total).toInt() else 0}%"
+        is UpdateUi.Ready -> "Pembaruan siap dipasang" to "Ketuk untuk memasang"
+        else -> null
+    }
+
     Column(Modifier.gameBackground()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            LogoMark(30.dp)
+            Text("GUILD GAMES", style = logoStyle(18), modifier = Modifier.weight(1f))
+            Box {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).background(PanelHigh).clickable { onSettings() },
+                    contentAlignment = Alignment.Center
+                ) { Text("⚙️", fontSize = 18.sp) }
+                if (banner != null) Box(
+                    Modifier.size(11.dp).align(Alignment.TopEnd).clip(CircleShape).background(ErrorRed)
+                )
+            }
+            AvatarCircle(
+                profile?.username.orEmpty(), profile?.photoUrl.orEmpty(), 40.dp,
+                Modifier.clickable { onProfile() }
+            )
+        }
+        if (banner != null) Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
+                .glass(16.dp).clickable { onSettings() }.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("🎉", fontSize = 22.sp)
+            Column(Modifier.weight(1f)) {
+                Text(banner.first, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(banner.second, color = TextDim, fontSize = 12.sp)
+            }
+            Text("›", color = TextDim, fontSize = 22.sp)
+        }
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,

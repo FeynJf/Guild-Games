@@ -32,3 +32,17 @@ Push ke branch `main` atau jalankan manual di tab Actions. APK ada di **Artifact
 ## Catatan
 - Role `admin` diatur manual di Firestore (`users/{uid}.role`).
 - Kode Developer dicek di sisi aplikasi, jadi bisa dibongkar dari APK. Untuk keamanan nyata, pindahkan ke Cloud Function.
+
+## Update 1.2 - Kode Developer via GitHub Secrets, Profil, Pengaturan, Update dalam aplikasi
+**Kode Developer / "Layanan email belum diatur"**: kunci EmailJS sekarang dibaca saat build dari GitHub Secrets (tidak perlu edit `Config.kt`). Tambahkan di Settings > Secrets and variables > Actions:
+
+| Secret | Isi |
+| ------ | --- |
+| `EMAILJS_SERVICE_ID` | Service ID dari EmailJS (Email Services) |
+| `EMAILJS_TEMPLATE_ID` | Template ID (kolom *To Email* = `{{to_email}}`, isi memuat `{{code}}`) |
+| `EMAILJS_PUBLIC_KEY` | Public Key (Account > General) |
+| `APPROVER_EMAIL` | Opsional. Isi Gmail kamu supaya kode developer selalu dikirim ke kamu |
+
+Di EmailJS aktifkan juga Account > Security > *Allow EmailJS API for non-browser applications*.
+
+**Update lewat aplikasi**: tiap push ke `main`, workflow membuat GitHub Release `v<versionName>` berisi APK dan catatan dari `RELEASE_NOTES.md`. Aplikasi (Pengaturan > Pembaruan Aplikasi) membandingkan rilis terbaru dengan versi terpasang. Untuk merilis update berikutnya: naikkan `versionCode` dan `versionName` di `app/build.gradle.kts`, ubah `RELEASE_NOTES.md`, lalu push. APK harus selalu ditandatangani keystore yang sama, kalau tidak Android menolak memasangnya sebagai update.

@@ -1,0 +1,4 @@
+- Perbaikan: kode verifikasi Gmail untuk daftar Developer sekarang terkirim.
+- Perbaikan: login dengan Gmail tidak lagi menampilkan error merah padahal berhasil.
+- Baru: halaman Profil untuk melihat akun yang sedang login.
+- Baru: halaman Pengaturan dengan pembaruan lewat aplikasi (unduh, progres, notifikasi).
