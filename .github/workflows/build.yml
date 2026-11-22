@@ -26,7 +26,11 @@ jobs:
           KEYSTORE_PASSWORD: 3x0QdC4oMXHoZxLI
           KEY_ALIAS: guild
           KEY_PASSWORD: 3x0QdC4oMXHoZxLI
+          EMAILJS_SERVICE_ID: ${{ secrets.EMAILJS_SERVICE_ID }}
+          EMAILJS_TEMPLATE_ID: ${{ secrets.EMAILJS_TEMPLATE_ID }}
+          EMAILJS_PUBLIC_KEY: ${{ secrets.EMAILJS_PUBLIC_KEY }}
           EMAILJS_PRIVATE_KEY: ${{ secrets.EMAILJS_PRIVATE_KEY }}
+          APPROVER_EMAIL: ${{ secrets.APPROVER_EMAIL }}
         run: gradle assembleRelease --no-daemon
 
       - uses: actions/upload-artifact@v4
