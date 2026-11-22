@@ -22,7 +22,7 @@ object DevCode {
 
     /** @return null jika sukses, atau pesan error */
     suspend fun request(gmail: String): String? {
-        if (!isConfigured()) return "Layanan email belum diatur. Pemilik aplikasi perlu mengisi EmailJS di GitHub Secrets (lihat README)."
+        if (!isConfigured()) return "Layanan email belum diatur"
         val newCode = String.format("%06d", SecureRandom().nextInt(1_000_000))
         val target = Config.APPROVER_EMAIL.ifBlank { gmail.trim() }
         val err = withContext(Dispatchers.IO) { send(target, newCode, gmail.trim()) }
@@ -75,12 +75,8 @@ object DevCode {
         val status = conn.responseCode
         if (status in 200..299) null
         else {
-            val detail = conn.errorStream?.bufferedReader()?.readText().orEmpty().take(160)
-            when (status) {
-                403 -> "EmailJS menolak (403). Aktifkan izin API untuk aplikasi non-browser di EmailJS > Account > Security."
-                400 -> "EmailJS menolak (400): $detail"
-                else -> "Gagal kirim email ($status): $detail"
-            }
+            val body = conn.errorStream?.bufferedReader()?.readText().orEmpty().trim().take(160)
+            "EmailJS menolak ($status): $body"
         }
     } catch (e: Exception) {
         "Tidak bisa mengirim email: ${e.localizedMessage}"
