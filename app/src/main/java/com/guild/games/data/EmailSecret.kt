@@ -6,5 +6,5 @@ package com.guild.games.data
  * Jangan upload repo ini dalam keadaan Public kalau kolom ini sudah diisi.
  */
 object EmailSecret {
-    const val PRIVATE_KEY = ""
+    const val PRIVATE_KEY = "A0ZApI52G0mNsO3x0rLjO"
 }
