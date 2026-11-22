@@ -42,4 +42,3 @@ fun AppNav() {
         composable("createguild") { CreateGuildScreen(onBack = { nav.popBackStack() }) }
     }
 }
-
