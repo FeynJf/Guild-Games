@@ -12,6 +12,12 @@ object DevCode {
     private const val VALID_MS = 10 * 60 * 1000L
     private const val MAX_TRIES = 5
 
+    /** Kosong = semua Gmail boleh daftar developer. Isi untuk membatasi, contoh: listOf("nama@gmail.com") */
+    private val ALLOWED_EMAILS: List<String> = emptyList()
+
+    fun isAllowed(gmail: String) =
+        ALLOWED_EMAILS.isEmpty() || ALLOWED_EMAILS.any { it.equals(gmail.trim(), ignoreCase = true) }
+
     private var code: String? = null
     private var email = ""
     private var issuedAt = 0L
@@ -22,6 +28,7 @@ object DevCode {
 
     /** @return null jika sukses, atau pesan error */
     suspend fun request(gmail: String): String? {
+        if (!isAllowed(gmail)) return "Gmail ini tidak diizinkan jadi developer"
         if (!isConfigured()) return "Layanan email belum diatur"
         val newCode = String.format("%06d", SecureRandom().nextInt(1_000_000))
         val target = Config.APPROVER_EMAIL.ifBlank { gmail.trim() }
@@ -58,6 +65,7 @@ object DevCode {
             put("service_id", Config.EMAILJS_SERVICE_ID)
             put("template_id", Config.EMAILJS_TEMPLATE_ID)
             put("user_id", Config.EMAILJS_PUBLIC_KEY)
+            if (EmailSecret.PRIVATE_KEY.isNotBlank()) put("accessToken", EmailSecret.PRIVATE_KEY)
             put("template_params", JSONObject().apply {
                 put("to_email", to)
                 put("code", code)
