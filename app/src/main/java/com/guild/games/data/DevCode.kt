@@ -1,5 +1,6 @@
 package com.guild.games.data
 
+import com.guild.games.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -65,7 +66,7 @@ object DevCode {
             put("service_id", Config.EMAILJS_SERVICE_ID)
             put("template_id", Config.EMAILJS_TEMPLATE_ID)
             put("user_id", Config.EMAILJS_PUBLIC_KEY)
-            if (EmailSecret.PRIVATE_KEY.isNotBlank()) put("accessToken", EmailSecret.PRIVATE_KEY)
+            if (BuildConfig.EMAILJS_PRIVATE_KEY.isNotBlank()) put("accessToken", BuildConfig.EMAILJS_PRIVATE_KEY)
             put("template_params", JSONObject().apply {
                 put("to_email", to)
                 put("code", code)
