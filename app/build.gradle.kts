@@ -5,7 +5,7 @@ plugins {
 }
 
 val ksPath: String? = System.getenv("KEYSTORE_PATH")
-val emailPrivateKey: String = System.getenv("EMAILJS_PRIVATE_KEY") ?: ""
+fun env(name: String): String = System.getenv(name) ?: ""
 
 android {
     namespace = "com.guild.games"
@@ -17,7 +17,11 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "1.1"
-        buildConfigField("String", "EMAILJS_PRIVATE_KEY", "\"$emailPrivateKey\"")
+        buildConfigField("String", "EMAILJS_SERVICE_ID", "\"${env("EMAILJS_SERVICE_ID")}\"")
+        buildConfigField("String", "EMAILJS_TEMPLATE_ID", "\"${env("EMAILJS_TEMPLATE_ID")}\"")
+        buildConfigField("String", "EMAILJS_PUBLIC_KEY", "\"${env("EMAILJS_PUBLIC_KEY")}\"")
+        buildConfigField("String", "EMAILJS_PRIVATE_KEY", "\"${env("EMAILJS_PRIVATE_KEY")}\"")
+        buildConfigField("String", "APPROVER_EMAIL", "\"${env("APPROVER_EMAIL")}\"")
     }
 
     signingConfigs {
