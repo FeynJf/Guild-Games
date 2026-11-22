@@ -39,6 +39,14 @@ fun AppNav() {
                 }
             )
         }
-        composable("createguild") { CreateGuildScreen(onBack = { nav.popBackStack() }) }
+        composable("createguild") {
+            CreateGuildScreen(
+                onCreate = { name, description ->
+                    // TODO: simpan guild ke Firebase memakai name dan description
+                    nav.popBackStack()
+                },
+                onBack = { nav.popBackStack() }
+            )
+        }
     }
 }
