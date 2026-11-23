@@ -1,0 +1,87 @@
+package com.guild.games.ui
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.GoogleAuthProvider
+import com.guild.games.R
+
+/**
+ * Tombol "Masuk dengan Google" untuk login developer.
+ * onSuccess dipanggil dengan FirebaseUser setelah Firebase Auth berhasil.
+ * Cek role developer (misalnya users/{uid}.role di Firestore) dilakukan oleh pemanggil.
+ */
+@Composable
+fun GoogleSignInButton(
+    onSuccess: (FirebaseUser) -> Unit,
+    modifier: Modifier = Modifier,
+    text: String = "Masuk dengan Google",
+    onError: (String) -> Unit = {}
+) {
+    val context = LocalContext.current
+    var loading by remember { mutableStateOf(false) }
+
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        try {
+            val account = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                .getResult(ApiException::class.java)
+            val idToken = account.idToken
+            if (idToken == null) {
+                loading = false
+                onError("Token Google tidak ditemukan")
+            } else {
+                val credential = GoogleAuthProvider.getCredential(idToken, null)
+                FirebaseAuth.getInstance().signInWithCredential(credential)
+                    .addOnCompleteListener { task ->
+                        loading = false
+                        val user = if (task.isSuccessful) task.result?.user else null
+                        if (user != null) {
+                            onSuccess(user)
+                        } else {
+                            onError(task.exception?.localizedMessage ?: "Login Google gagal")
+                        }
+                    }
+            }
+        } catch (e: ApiException) {
+            loading = false
+            when (e.statusCode) {
+                12501 -> Unit // pengguna membatalkan
+                10 -> onError("Login Google gagal (kode 10): periksa SHA-1 dan google-services.json")
+                else -> onError("Login Google gagal (kode ${e.statusCode})")
+            }
+        }
+    }
+
+    OutlinedButton(
+        onClick = {
+            loading = true
+            val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestIdToken(context.getString(R.string.default_web_client_id))
+                .requestEmail()
+                .build()
+            val client = GoogleSignIn.getClient(context, options)
+            // signOut dulu supaya pemilih akun Google selalu muncul
+            client.signOut().addOnCompleteListener { launcher.launch(client.signInIntent) }
+        },
+        enabled = !loading,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Text(if (loading) "Menghubungkan..." else text)
+    }
+}
