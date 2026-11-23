@@ -13,10 +13,6 @@ fun AppNav() {
     val goMain: () -> Unit = {
         nav.navigate("main") { popUpTo("login") { inclusive = true } }
     }
-    val logout: () -> Unit = {
-        FirebaseAuth.getInstance().signOut()
-        nav.navigate("login") { popUpTo("main") { inclusive = true } }
-    }
     NavHost(navController = nav, startDestination = "splash") {
         composable("splash") {
             SplashScreen { loggedIn ->
@@ -37,33 +33,12 @@ fun AppNav() {
         composable("main") {
             MainScreen(
                 onCreateGuild = { nav.navigate("createguild") },
-                onProfile = { nav.navigate("profile") { launchSingleTop = true } },
-                onSettings = { nav.navigate("settings") { launchSingleTop = true } },
-                onLogout = logout
+                onLogout = {
+                    FirebaseAuth.getInstance().signOut()
+                    nav.navigate("login") { popUpTo("main") { inclusive = true } }
+                }
             )
         }
-        composable("profile") {
-            ProfileScreen(
-                onBack = { nav.popBackStack() },
-                onSettings = { nav.navigate("settings") { launchSingleTop = true } },
-                onLogout = logout
-            )
-        }
-        composable("settings") {
-            SettingsScreen(
-                onBack = { nav.popBackStack() },
-                onProfile = { nav.navigate("profile") { launchSingleTop = true } },
-                onLogout = logout
-            )
-        }
-        composable("createguild") {
-            CreateGuildScreen(
-                onCreate = { name, description ->
-                    // TODO: simpan guild ke Firebase memakai name dan description
-                    nav.popBackStack()
-                },
-                onBack = { nav.popBackStack() }
-            )
-        }
+        composable("createguild") { CreateGuildScreen(onBack = { nav.popBackStack() }) }
     }
 }
