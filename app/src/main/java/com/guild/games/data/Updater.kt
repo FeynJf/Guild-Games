@@ -70,7 +70,7 @@ object UpdateApi {
     /** Blocking, panggil dari Dispatchers.IO. */
     fun latest(): UpdateCheck {
         val conn = try {
-            (URL("https://api.github.com/repos/${Config.GITHUB_REPO}/releases/latest").openConnection() as HttpURLConnection).apply {
+            (URL("https://api.github.com/repos/${BuildConfig.GITHUB_REPO}/releases/latest").openConnection() as HttpURLConnection).apply {
                 connectTimeout = TIMEOUT
                 readTimeout = TIMEOUT
                 setRequestProperty("Accept", "application/vnd.github+json")
