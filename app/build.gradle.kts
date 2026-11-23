@@ -17,6 +17,7 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "1.1"
+        buildConfigField("String", "GITHUB_REPO", "\"FeynJf/Guild-Games\"")
         buildConfigField("String", "EMAILJS_SERVICE_ID", "\"${env("EMAILJS_SERVICE_ID")}\"")
         buildConfigField("String", "EMAILJS_TEMPLATE_ID", "\"${env("EMAILJS_TEMPLATE_ID")}\"")
         buildConfigField("String", "EMAILJS_PUBLIC_KEY", "\"${env("EMAILJS_PUBLIC_KEY")}\"")
